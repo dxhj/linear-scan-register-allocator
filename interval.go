@@ -21,8 +21,5 @@ func (a ByEndPoint) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByEndPoint) Less(i, j int) bool { return a[i].endPoint < a[j].endPoint }
 
 func DeleteInterval(intervals []*LiveInterval, index int) []*LiveInterval {
-	// copy(intervals[index:], intervals[index+1:]) // Shift a[i+1:] left one index.
-	// intervals[len(intervals)-1] = nil
-	// return intervals[:len(intervals)-1] // Truncate slice.
 	return intervals[:index+copy(intervals[index:], intervals[index+1:])]
 }
