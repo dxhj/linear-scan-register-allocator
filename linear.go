@@ -11,70 +11,98 @@ type Symbol struct {
 	location int
 }
 
-var pool *RegisterPool = &RegisterPool{
-	registers: []Register{EAX, EBX},
+type Allocator struct {
+	pool          *RegisterPool
+	active        ActiveLiveIntervals
+	nextStackSlot int
+	stackSlotSize int
+	trace         bool
 }
 
-var currentStackLocation = 0
+func NewAllocator(pool *RegisterPool) *Allocator {
+	return &Allocator{
+		pool:          pool,
+		stackSlotSize: 4,
+	}
+}
 
-func expireOldIntervals(activeIntervals ActiveLiveIntervals, interval *LiveInterval) ActiveLiveIntervals {
-	sort.Sort(ByEndPoint(activeIntervals))
-	for i, activeInterval := range activeIntervals {
-		if activeInterval.endPoint >= interval.startPoint {
-			return activeIntervals
+func (a *Allocator) Allocate(intervals []LiveInterval) {
+	sort.Sort(ByStartPoint(intervals))
+
+	for i := range intervals {
+		iv := &intervals[i]
+		a.expireOldIntervals(iv)
+
+		if a.pool.Empty() {
+			a.spillAtInterval(iv)
+			continue
 		}
-		pool.freeRegister(activeInterval.symbol.register)
-		return DeleteInterval(activeIntervals, i)
+
+		r, err := a.pool.Acquire()
+		if err != nil {
+			continue
+		}
+		iv.symbol.register = r
+		a.logf("ALLOCATE %s -> %s", iv.symbol.name, r)
+		a.active = insertByEndPoint(a.active, iv)
 	}
-	return activeIntervals
 }
 
-func spillAtInterval(activeIntervals ActiveLiveIntervals, interval *LiveInterval) {
-	sort.Sort(ByEndPoint(activeIntervals))
-	spill := activeIntervals[len(activeIntervals)-1]
-	if spill.endPoint > interval.endPoint {
-		fmt.Printf("ACTION: SPILL INTERVAL (%p)\n", spill)
-		fmt.Printf("ACTION: ALLOCATE REGISTER %s(%d) TO INTERVAL(%p)\n", spill.symbol.register.getRegisterName(), spill.symbol.register, interval)
-		interval.symbol.register = spill.symbol.register
-		spill.symbol.location = currentStackLocation
-		activeIntervals = DeleteInterval(activeIntervals, len(activeIntervals)-1)
-	} else {
-		fmt.Printf("ACTION: SPILL INTERVAL(%p)\n", interval)
-		interval.symbol.location = currentStackLocation
+func (a *Allocator) expireOldIntervals(iv *LiveInterval) {
+	i := 0
+	for ; i < len(a.active); i++ {
+		if a.active[i].endPoint >= iv.startPoint {
+			break
+		}
+		expired := a.active[i]
+		a.pool.Release(expired.symbol.register)
+		a.logf("EXPIRE  %s (free %s)", expired.symbol.name, expired.symbol.register)
 	}
-	currentStackLocation += 4
+	a.active = a.active[i:]
+}
+
+func (a *Allocator) spillAtInterval(iv *LiveInterval) {
+	spill := a.active[len(a.active)-1]
+	if spill.endPoint > iv.endPoint {
+		a.logf("SPILL   %s (reassign %s -> %s)",
+			spill.symbol.name, spill.symbol.register, iv.symbol.name)
+		iv.symbol.register = spill.symbol.register
+		spill.symbol.register = NoRegister
+		spill.symbol.location = a.nextStackSlot
+		a.active = a.active[:len(a.active)-1]
+		a.active = insertByEndPoint(a.active, iv)
+	} else {
+		a.logf("SPILL   %s (kept on stack)", iv.symbol.name)
+		iv.symbol.location = a.nextStackSlot
+	}
+	a.nextStackSlot += a.stackSlotSize
+}
+
+func (a *Allocator) logf(format string, args ...any) {
+	if a.trace {
+		fmt.Printf(format+"\n", args...)
+	}
 }
 
 func main() {
-	liveIntervals := []LiveInterval{
-		LiveInterval{symbol: Symbol{name: "a", location: -1}, startPoint: 1, endPoint: 4},
-		LiveInterval{symbol: Symbol{name: "b", location: -1}, startPoint: 2, endPoint: 6},
-		LiveInterval{symbol: Symbol{name: "c", location: -1}, startPoint: 3, endPoint: 10},
-		LiveInterval{symbol: Symbol{name: "d", location: -1}, startPoint: 5, endPoint: 9},
-		LiveInterval{symbol: Symbol{name: "e", location: -1}, startPoint: 7, endPoint: 8},
+	intervals := []LiveInterval{
+		{symbol: Symbol{name: "a", location: -1}, startPoint: 1, endPoint: 4},
+		{symbol: Symbol{name: "b", location: -1}, startPoint: 2, endPoint: 6},
+		{symbol: Symbol{name: "c", location: -1}, startPoint: 3, endPoint: 10},
+		{symbol: Symbol{name: "d", location: -1}, startPoint: 5, endPoint: 9},
+		{symbol: Symbol{name: "e", location: -1}, startPoint: 7, endPoint: 8},
 	}
-	var activeIntervals ActiveLiveIntervals
 
-	sort.Sort(ByStartPoint(liveIntervals))
+	alloc := NewAllocator(NewRegisterPool(EAX, EBX))
+	alloc.trace = true
+	alloc.Allocate(intervals)
 
-	for i, interval := range liveIntervals {
-		fmt.Printf("(%p). SYMBOL: %s | LOCATION: %d | STARTPOINT: %d | ENDPOINT: %d\n", &liveIntervals[i], interval.symbol.name, interval.symbol.location, interval.startPoint, interval.endPoint)
-
-		activeIntervals = expireOldIntervals(activeIntervals, &liveIntervals[i])
-
-		if pool.isEmpty() {
-			spillAtInterval(activeIntervals, &liveIntervals[i])
+	fmt.Println("--- assignments ---")
+	for _, iv := range intervals {
+		if iv.symbol.register != NoRegister {
+			fmt.Printf("%s -> %s\n", iv.symbol.name, iv.symbol.register)
 		} else {
-			register, err := pool.getRegister()
-			fmt.Printf("ACTION: ALLOCATE REGISTER %s(%d) TO INTERVAL(%p)\n", register.getRegisterName(), register, &liveIntervals[i])
-			if err == nil {
-				liveIntervals[i].symbol.register = register
-			}
-			activeIntervals = append(activeIntervals, &liveIntervals[i])
+			fmt.Printf("%s -> stack[%d]\n", iv.symbol.name, iv.symbol.location)
 		}
-	}
-
-	for _, interval := range liveIntervals {
-		fmt.Println(interval.symbol)
 	}
 }

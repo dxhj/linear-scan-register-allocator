@@ -2,15 +2,10 @@ package main
 
 import "errors"
 
-type RegisterPool struct {
-	head      int
-	registers []Register
-}
-
 type Register int
 
 const (
-	NoRegister = iota
+	NoRegister Register = iota
 	EAX
 	EBX
 	ECX
@@ -21,8 +16,8 @@ const (
 	EDI
 )
 
-var registers = [...]string{
-	NoRegister: "No Register",
+var registerNames = [...]string{
+	NoRegister: "no-register",
 	EAX:        "eax",
 	EBX:        "ebx",
 	ECX:        "ecx",
@@ -33,28 +28,36 @@ var registers = [...]string{
 	EDI:        "edi",
 }
 
-func (register Register) getRegisterName() string {
-	return registers[register]
-}
-
-func (pool *RegisterPool) getRegister() (Register, error) {
-	if len(pool.registers) == 0 {
-		return -1, errors.New("register pool: no remaining register")
+func (r Register) String() string {
+	if int(r) < 0 || int(r) >= len(registerNames) {
+		return "unknown"
 	}
-	register := pool.registers[0]
-	pool.registers = pool.registers[1:]
-	return register, nil
+	return registerNames[r]
 }
 
-func (pool *RegisterPool) freeRegister(register Register) {
-	for _, r := range pool.registers {
-		if r == register {
-			return
-		}
+var ErrNoRegister = errors.New("register pool: no free register")
+
+type RegisterPool struct {
+	free []Register
+}
+
+func NewRegisterPool(registers ...Register) *RegisterPool {
+	return &RegisterPool{free: append([]Register(nil), registers...)}
+}
+
+func (p *RegisterPool) Acquire() (Register, error) {
+	if len(p.free) == 0 {
+		return NoRegister, ErrNoRegister
 	}
-	pool.registers = append(pool.registers, register)
+	r := p.free[0]
+	p.free = p.free[1:]
+	return r, nil
 }
 
-func (pool *RegisterPool) isEmpty() bool {
-	return len(pool.registers) == 0
+func (p *RegisterPool) Release(r Register) {
+	p.free = append(p.free, r)
+}
+
+func (p *RegisterPool) Empty() bool {
+	return len(p.free) == 0
 }
